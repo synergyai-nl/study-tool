@@ -2,14 +2,76 @@
 import Image from "next/image";
 import AddEntryForm from '@/components/AddEntryForm';
 import ToastProvider, { useToast } from '@/components/ToastProvider';
-import React from 'react';
+import React, { useEffect, useState } from 'react';
+import { supabase } from '@/lib/supabase';
 
 function AddEntryFormWithToast() {
   const { showToast } = useToast();
   return <AddEntryForm onFeedback={showToast} />;
 }
 
-export default function HomeClient({ data }: { data: any[] }) {
+export default function HomeClient() {
+  const [data, setData] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const [sortColumn, setSortColumn] = useState<string | null>(null);
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+  const PAGE_SIZE = 10;
+
+  const fetchEntries = async (from: number, to: number) => {
+    setLoading(true);
+    const { data: newData, error } = await supabase
+      .from('entries')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .range(from, to);
+    setLoading(false);
+    if (error) return;
+    if (newData.length < PAGE_SIZE + 1) setHasMore(false);
+    setData((prev) => [...prev, ...newData]);
+  };
+
+  useEffect(() => {
+    fetchEntries(0, PAGE_SIZE - 1);
+    // eslint-disable-next-line
+  }, []);
+
+  const handleLoadMore = () => {
+    fetchEntries(data.length, data.length + PAGE_SIZE - 1);
+  };
+
+  // Sorting logic
+  const handleSort = (column: string) => {
+    if (sortColumn === column) {
+      setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortColumn(column);
+      setSortDirection('asc');
+    }
+  };
+
+  const getSortedData = () => {
+    if (!sortColumn) return data;
+    return [...data].sort((a, b) => {
+      const aValue = a[sortColumn];
+      const bValue = b[sortColumn];
+      if (aValue === null || aValue === undefined) return 1;
+      if (bValue === null || bValue === undefined) return -1;
+      if (typeof aValue === 'number' && typeof bValue === 'number') {
+        return sortDirection === 'asc' ? aValue - bValue : bValue - aValue;
+      }
+      if (typeof aValue === 'string' && typeof bValue === 'string') {
+        return sortDirection === 'asc'
+          ? aValue.localeCompare(bValue)
+          : bValue.localeCompare(aValue);
+      }
+      // fallback to string comparison
+      return sortDirection === 'asc'
+        ? String(aValue).localeCompare(String(bValue))
+        : String(bValue).localeCompare(String(aValue));
+    });
+  };
+
   return (
     <ToastProvider>
       <div className="relative min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-100 dark:from-gray-900 dark:via-gray-950 dark:to-gray-900 flex flex-col items-center justify-start p-4">
@@ -28,7 +90,6 @@ export default function HomeClient({ data }: { data: any[] }) {
           <section>
             <h2 className="text-2xl font-semibold mb-4 text-gray-900 dark:text-white flex items-center gap-2">
               <span>Data Entries</span>
-              <span className="text-xs font-normal text-gray-400 dark:text-gray-500">(latest 5)</span>
             </h2>
             {data && data.length > 0 ? (
               <div className="bg-white dark:bg-gray-800 shadow-lg rounded-lg overflow-hidden">
@@ -37,25 +98,63 @@ export default function HomeClient({ data }: { data: any[] }) {
                     <thead className="bg-gray-50 dark:bg-gray-700">
                       <tr>
                         {Object.keys(data[0]).map((key) => (
-                          <th key={key} className="px-6 py-3 text-left text-xs font-bold text-gray-500 dark:text-gray-300 uppercase tracking-wider">
-                            {key}
+                          <th
+                            key={key}
+                            className="px-6 py-3 text-left text-xs font-bold text-gray-500 dark:text-gray-300 uppercase tracking-wider cursor-pointer select-none hover:text-blue-600 dark:hover:text-blue-300"
+                            onClick={() => handleSort(key)}
+                            aria-sort={sortColumn === key ? (sortDirection === 'asc' ? 'ascending' : 'descending') : 'none'}
+                            tabIndex={0}
+                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleSort(key); }}
+                            role="columnheader button"
+                          >
+                            <span className="flex items-center gap-1">
+                              {key}
+                              {sortColumn === key && (
+                                <span aria-label={sortDirection === 'asc' ? 'Sorted ascending' : 'Sorted descending'}>
+                                  {sortDirection === 'asc' ? '▲' : '▼'}
+                                </span>
+                              )}
+                            </span>
                           </th>
                         ))}
                       </tr>
                     </thead>
                     <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
-                      {data.map((row, index) => (
+                      {getSortedData().map((row, index) => (
                         <tr key={index} className={index % 2 === 0 ? "bg-gray-50 dark:bg-gray-900" : "" + " hover:bg-blue-50 dark:hover:bg-gray-700 transition-colors duration-150"}>
-                          {Object.values(row).map((value, valueIndex) => (
-                            <td key={valueIndex} className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
-                              {typeof value === 'object' ? JSON.stringify(value) : String(value)}
-                            </td>
-                          ))}
+                          {Object.values(row).map((value, valueIndex) => {
+                            let displayValue = value;
+                            let isTruncated = false;
+                            if (typeof value === 'string' && value.length > 60) {
+                              displayValue = value.slice(0, 60) + '…';
+                              isTruncated = true;
+                            }
+                            return (
+                              <td
+                                key={valueIndex}
+                                className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100 max-w-xs overflow-hidden text-ellipsis"
+                                title={isTruncated && typeof value === 'string' ? value : undefined}
+                              >
+                                {typeof value === 'object' ? JSON.stringify(value) : String(displayValue)}
+                              </td>
+                            );
+                          })}
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
+                {hasMore && (
+                  <div className="flex justify-center p-4">
+                    <button
+                      onClick={handleLoadMore}
+                      disabled={loading}
+                      className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 disabled:from-blue-400 disabled:to-purple-400 text-white font-semibold py-2 px-4 rounded-lg transition-all duration-200 shadow-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+                    >
+                      {loading ? 'Loading...' : 'Load More'}
+                    </button>
+                  </div>
+                )}
               </div>
             ) : (
               <div className="flex flex-col items-center justify-center py-12">
